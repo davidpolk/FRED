@@ -196,7 +196,12 @@ void loop() {
 
   if ((proxSensorVal == 0 || prox2SensorVal == 0 ) && isRobotBulldozing == false){
     myL6474.HardStop(0, 1);
+    isMoving = false;
   }
+
+  
+
+
 
  /// **** DELETE; SD Card Module not used **** ///
   writeToSDCard(timeStr, "Test Message", "test.txt");
@@ -210,6 +215,7 @@ void loop() {
 
   if (isRewardPending == true && isRobotInFeedPosition == true){
     myL6474.HardStop(0, 1);
+    isMoving = false;
     delay(10);
     feed(rewDurationMs);
     Serial.print("Rewarded for "); 
@@ -218,21 +224,21 @@ void loop() {
   }
 
   if (isRobotBulldozing == true)
-   {
-	myL6474.SetMaxSpeed(0,2000);
+  {
+	  myL6474.SetMaxSpeed(0,2000);
   	myL6474.SetMinSpeed(0,500);
   	myL6474.SetAcceleration(0, 500);
-	myL6474.Run(0, FORWARD, 1);
-	isBulldozeDone = true;
-   }
+    myL6474.Run(0, FORWARD, 1);
+    isBulldozeDone = true;
+  }
 
    if (isBulldozeDone == true)
    {
-	myL6474.SetMaxSpeed(0,4000);
+	  myL6474.SetMaxSpeed(0,4000);
   	myL6474.SetMinSpeed(0,1000);
   	myL6474.SetAcceleration(0, 1000);
-	isRobotBulldozing = false;
-	isBulldozeDone = false;
+	  isRobotBulldozing = false;
+	  isBulldozeDone = false;
    }
   
   // Get Data from CheetahDue
@@ -502,6 +508,8 @@ void sysTest(){
     retractFeederPlate(myL6474);
     delay(2000);
 
+
+
     clearLCD();
 }
 
@@ -530,6 +538,7 @@ void feed(int rewDuration){
     //   delay(5);
     // }
     delay(7000); // update to 20 seconds delay
+
     retractFeederPlate(myL6474);
     for (int i=0; i<5; i++){
       QueuePacket(&r2c, 'R', 9, 9, 9, packNum+1, false, true, true, true);
@@ -541,11 +550,13 @@ void feed(int rewDuration){
 
 
 void extendFeederPlate(L6474 myL6474){
+  myL6474.HardStop(0, 1);
+  delay(100);
   //myL6474.Run(0, FORWARD, 1);
   myL6474.SetMaxSpeed(0,2000);
-  myL6474.SetMinSpeed(0,1000);
-  // myL6474.SetAcceleration(0,1000);
-  // myL6474.SetDeceleration(0,1000);
+  myL6474.SetMinSpeed(0,2000);
+  myL6474.SetAcceleration(0,1000);
+  myL6474.SetDeceleration(0,1000);
   myL6474.GoTo(0, -1700, 0);
   delay(750); //220ms delay = ~90 degree motor turn
   myL6474.HardStop(0, 0);
@@ -556,17 +567,19 @@ void extendFeederPlate(L6474 myL6474){
 }
 
 void retractFeederPlate(L6474 myL6474){
+  myL6474.HardStop(0, 1);
+  delay(100);
   myL6474.SetMaxSpeed(0,2000);
-  myL6474.SetMinSpeed(0,1000);
-  // myL6474.SetAcceleration(0,1000);
-  // myL6474.SetDeceleration(0,1000);
+  myL6474.SetMinSpeed(0,2000);
+  myL6474.SetAcceleration(0,1000);
+  myL6474.SetDeceleration(0,1000);
   myL6474.GoTo(0, 1500, 0);
   delay(750); //220ms delay = ~90 degree motor turn
   myL6474.HardStop(0, 0);
   myL6474.SetMaxSpeed(0,5000);
   myL6474.SetMinSpeed(0,4000);
-  // myL6474.SetAcceleration(0,1000);
-  // myL6474.SetDeceleration(0,1000);
+  myL6474.SetAcceleration(0,1000);
+  myL6474.SetDeceleration(0,1000);
 }
 
 
@@ -1809,6 +1822,7 @@ void checkMove(){
   if (proxSensorVal == 0 && prox2SensorVal == 0){
     myL6474.HardStop(0, 1);
     isMoveReady = false;
+    isMoving = false;
   }
   // If only front sensor is activated, get ready to move forward
   else if (proxSensorVal == 0 && prox2SensorVal == 1){
@@ -1822,17 +1836,20 @@ void checkMove(){
     // If rat is in front of robot, move forward
     if (isMoveReady == true && isHalted == false){
       myL6474.Run(0, FORWARD, 1);
-      delay(1000);
+      delay(10);
+      isMoving = true;
     }
   }
 }
 
 void stopRobot(){
   myL6474.HardStop(0, 1);
+  isMoving = false;
 }
 
 void stopRobotSlow(){
   myL6474.SoftStop(0);
+  isMoving = false;
 }
 
 // void ProcRewCmd(byte cmd_type, float cmd_goal, int cmd_zone_delay)
