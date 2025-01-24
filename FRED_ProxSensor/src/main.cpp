@@ -39,7 +39,7 @@ int pumpOpenScale;
 int bullDel;
 int bullSpeed;
 int cnt_logBytesStored;
-int rewDuration = 0; // (ms) 
+int rewDurationMs = 0; // (ms) 
 
 // PID
 const float setPointHead = 60;
@@ -88,7 +88,8 @@ bool isLEDon = true;
 bool isMoveReady = false;
 bool isRewardPending = false;
 bool isRobotInFeedPosition = false;
-
+bool isRobotBulldozing = false;
+bool isBulldozeDone = false;
 
 // Time Variables
 int ratStopTime;
@@ -175,7 +176,7 @@ void setup() {
   myL6474.SetHome(0, 1);
   // myL6474.SetHome(1, 0);
 
-  //sysTest(); 
+  sysTest(); 
 
   Serial.println("Setup Complete!");
   writeLCD("SysTest Complete!", 0);
@@ -193,7 +194,7 @@ void loop() {
   
 
 
-  if (proxSensorVal == 0 || prox2SensorVal == 0 ){
+  if ((proxSensorVal == 0 || prox2SensorVal == 0 ) && isRobotBulldozing == false){
     myL6474.HardStop(0, 1);
   }
 
@@ -209,9 +210,30 @@ void loop() {
 
   if (isRewardPending == true && isRobotInFeedPosition == true){
     myL6474.HardStop(0, 1);
-    ProcRewCmd(0, 0, 0);
+    delay(10);
+    feed(rewDurationMs);
+    Serial.print("Rewarded for "); 
+    Serial.println(rewDurationMs);
     isRewardPending = false;
   }
+
+  if (isRobotBulldozing == true)
+   {
+	myL6474.SetMaxSpeed(0,2000);
+  	myL6474.SetMinSpeed(0,500);
+  	myL6474.SetAcceleration(0, 500);
+	myL6474.Run(0, FORWARD, 1);
+	isBulldozeDone = true;
+   }
+
+   if (isBulldozeDone == true)
+   {
+	myL6474.SetMaxSpeed(0,4000);
+  	myL6474.SetMinSpeed(0,1000);
+  	myL6474.SetAcceleration(0, 1000);
+	isRobotBulldozing = false;
+	isBulldozeDone = false;
+   }
   
   // Get Data from CheetahDue
   // GetSerial(&a2r);
@@ -306,7 +328,7 @@ else {
   if (!(PINC & (1 << PINC1))) {
     clearLCD();
     writeLCD("Feeding Routine", 0);
-    feed(2000);
+    feed(900);   
     clearLCD();
   }
 
@@ -1045,7 +1067,7 @@ void GetSerial(R4_COM<HardwareSerial> *p_r4) {
 
   // Bail if no new input
   if (p_r4->hwSerial.available() == 0) {
-    Serial.println("HW Serial not Available");
+   // Serial.println("HW Serial not Available");
     return;
   }
   // else {
@@ -1149,6 +1171,7 @@ void GetSerial(R4_COM<HardwareSerial> *p_r4) {
     QueuePacket(&r2a, 'b', 1, 0, 0, 0, false, false);
     QueuePacket(&r2a, 'b', 0, 0, 0, 0, false, false);
     isSetupComplete = true;
+    isRobotBulldozing = true;
     break;
     
   case ('H'):
@@ -1158,11 +1181,11 @@ void GetSerial(R4_COM<HardwareSerial> *p_r4) {
     SendPacket(&r2c);
     Serial.println("Case H");
     
-    if (dat[1] == 1){
+    if (dat[0] == 1){
       isHalted = true;
       
     }
-    else if (dat[1] == 2){
+    else if (dat[0] == 2){
       isHalted = false;
     }
     //myL6474.HardStop(0, 1);
@@ -1428,6 +1451,31 @@ case ('S'):
     QueuePacket(&r2c, 'R', c2r.dat[0], c2r.dat[1], c2r.dat[2], packNum, false, true, true, true);
     delay(5);
     SendPacket(&r2c);
+
+   /* 1ml      = 900ms     -  2.5s
+      0.75ml   = 675ms     -  1.85s
+      0.6ml    = 540ms     -  1.42s
+      0.425ml  = 410ms     -  0.9s
+      0.25ml   = 250ms     -  0.5s
+  */
+    //c2r.dat[0];
+    
+    if (dat[0] == (float)1){
+      rewDurationMs = 250;
+    }
+    else if (dat[0] == (float)2){
+      rewDurationMs = 410;
+    }
+    else if (dat[0]  == (float)3){
+      rewDurationMs = 540;
+    }
+    else if (dat[0]  == (float)4){
+      rewDurationMs = 675;
+    }
+    else if (dat[0]  == (float)5){
+      rewDurationMs = 900;
+    }
+    
     Serial.print("dat[0]: ");
     Serial.println(dat[0]);
     Serial.print("dat[1]: ");
@@ -1772,7 +1820,7 @@ void checkMove(){
   // If both sensor are inactive, determine whether rat is in front or behind sensors
   else if (proxSensorVal == 1 && prox2SensorVal == 1){
     // If rat is in front of robot, move forward
-    if (isMoveReady == true){
+    if (isMoveReady == true && isHalted == false){
       myL6474.Run(0, FORWARD, 1);
       delay(1000);
     }
@@ -1787,361 +1835,361 @@ void stopRobotSlow(){
   myL6474.SoftStop(0);
 }
 
-void ProcRewCmd(byte cmd_type, float cmd_goal, int cmd_zone_delay)
-{
+// void ProcRewCmd(byte cmd_type, float cmd_goal, int cmd_zone_delay)
+// {
 
-	// NOTE: arg2 = reward delay or zone ind or reward duration
+// 	// NOTE: arg2 = reward delay or zone ind or reward duration
 
-  rewDuration = 400;
-  feed(rewDuration);
-	// Local vars
-	// int cmd_zone_ind = -1;
-	// int cmd_delay = -1;
+//   rewDuration = 400;
+//   feed(rewDuration);
+// 	// Local vars
+// 	// int cmd_zone_ind = -1;
+// 	// int cmd_delay = -1;
 
-	// // Store mode
-	// rewMode =
-	// 	cmd_type == 0 ? BUTTON :
-	// 	cmd_type == 1 ? NOW :
-	// 	cmd_type == 2 ? CUE :
-	// 	FREE;
+// 	// // Store mode
+// 	// rewMode =
+// 	// 	cmd_type == 0 ? BUTTON :
+// 	// 	cmd_type == 1 ? NOW :
+// 	// 	cmd_type == 2 ? CUE :
+// 	// 	FREE;
 
-	// // Update counts
-	// if (rewMode != BUTTON)
-	// {
-  //   // rewDuration = 400;
-  //   QueuePacket(&r2c, 'R', c2r.dat[0], c2r.dat[1], c2r.dat[2], 0, false, true, false, false);
-  //   delay(1);
-  //   SendPacket(&r2c);
-	// 	cnt_cmd++;
+// 	// // Update counts
+// 	// if (rewMode != BUTTON)
+// 	// {
+//   //   // rewDuration = 400;
+//   //   QueuePacket(&r2c, 'R', c2r.dat[0], c2r.dat[1], c2r.dat[2], 0, false, true, false, false);
+//   //   delay(1);
+//   //   SendPacket(&r2c);
+// 	// 	cnt_cmd++;
 
-  //   // feed(rewDuration);
-	// }
-	// cnt_rew++;
+//   //   // feed(rewDuration);
+// 	// }
+// 	// cnt_rew++;
 
-	// // Format string
+// 	// // Format string
 
-	// // Handle zone/delay arg
-	// if (rewMode == NOW || rewMode == CUE)
-	// {
-  //   QueuePacket(&r2c, 'R', c2r.dat[0], c2r.dat[1], c2r.dat[2], 0, false, true, false, false);
-  //   delay(1);
-  //   SendPacket(&r2c);
-	// 	// Set to zero based index
-	// 	cmd_zone_ind = cmd_zone_delay - 1;
+// 	// // Handle zone/delay arg
+// 	// if (rewMode == NOW || rewMode == CUE)
+// 	// {
+//   //   QueuePacket(&r2c, 'R', c2r.dat[0], c2r.dat[1], c2r.dat[2], 0, false, true, false, false);
+//   //   delay(1);
+//   //   SendPacket(&r2c);
+// 	// 	// Set to zero based index
+// 	// 	cmd_zone_ind = cmd_zone_delay - 1;
 
-  //   // feed(rewDuration);
-	// }
-	// else if (rewMode == FREE)
-	// {
-	// 	cmd_delay = cmd_zone_delay;
-	// }
+//   //   // feed(rewDuration);
+// 	// }
+// 	// else if (rewMode == FREE)
+// 	// {
+// 	// 	cmd_delay = cmd_zone_delay;
+// 	// }
 
-	// // Setup "BUTTON" reward
-	// if (rewMode == BUTTON)
-	// {
-  //   QueuePacket(&r2c, 'R', c2r.dat[0], c2r.dat[1], c2r.dat[2], 0, false, true, false, false);
-  //   delay(1);
-  //   SendPacket(&r2c);
-	// 	// Set duration to default
-	// 	SetZoneDur(400);
-  //   RunReward();
-	// }
+// 	// // Setup "BUTTON" reward
+// 	// if (rewMode == BUTTON)
+// 	// {
+//   //   QueuePacket(&r2c, 'R', c2r.dat[0], c2r.dat[1], c2r.dat[2], 0, false, true, false, false);
+//   //   delay(1);
+//   //   SendPacket(&r2c);
+// 	// 	// Set duration to default
+// 	// 	SetZoneDur(400);
+//   //   RunReward();
+// 	// }
 
-	// // Setup "NOW" reward
-	// else if (rewMode == NOW)
-	// {
+// 	// // Setup "NOW" reward
+// 	// else if (rewMode == NOW)
+// 	// {
 
-	// 	// Set duration
-	// 	// SetZoneDur(cmd_zone_ind);
-  //   rewDuration = 400;
-  //   feed(rewDuration);
-  //   // RunReward();
-	// }
+// 	// 	// Set duration
+// 	// 	// SetZoneDur(cmd_zone_ind);
+//   //   rewDuration = 400;
+//   //   feed(rewDuration);
+//   //   // RunReward();
+// 	// }
 
-	// // Setup "CUE" reward
-	// else if (rewMode == CUE)
-	// {
+// 	// // Setup "CUE" reward
+// 	// else if (rewMode == CUE)
+// 	// {
 
-	// 	// Include specified zone
-	// 	zoneMin = cmd_zone_ind;
-	// 	zoneMax = cmd_zone_ind;
+// 	// 	// Include specified zone
+// 	// 	zoneMin = cmd_zone_ind;
+// 	// 	zoneMax = cmd_zone_ind;
 
-	// 	// Set zone bounds
-	// 	SetZoneBounds(cmd_goal);
+// 	// 	// Set zone bounds
+// 	// 	SetZoneBounds(cmd_goal);
 
-	// 	// Set delay to zero
-	// 	rewDelay = 0;
-	// }
+// 	// 	// Set delay to zero
+// 	// 	rewDelay = 0;
+// 	// }
 
-	// // Setup "FREE" reward
-	// else if (rewMode == FREE)
-	// {
+// 	// // Setup "FREE" reward
+// 	// else if (rewMode == FREE)
+// 	// {
 
-	// 	// Include all zones
-	// 	zoneMin = 0;
-	// 	zoneMax = zoneLng - 1;
+// 	// 	// Include all zones
+// 	// 	zoneMin = 0;
+// 	// 	zoneMax = zoneLng - 1;
 
-	// 	// Set zone bounds
-	// 	SetZoneBounds(cmd_goal);
+// 	// 	// Set zone bounds
+// 	// 	SetZoneBounds(cmd_goal);
 
-	// 	// Store reward delay time in ms
-	// 	rewDelay = cmd_delay * 1000;
-	// }
+// 	// 	// Store reward delay time in ms
+// 	// 	rewDelay = cmd_delay * 1000;
+// 	// }
 
-	// // Log
+// 	// // Log
 
-}
+//}
 
-bool RunReward()
-{
+// bool RunReward()
+// {
 
 
-	// Local vars
-	bool reward_done = false;
+// 	// Local vars
+// 	bool reward_done = false;
 
-	// Bail if rewarding
-	if (isRewarding)
-	{
+// 	// Bail if rewarding
+// 	if (isRewarding)
+// 	{
 
-		return reward_done;
-	}
+// 		return reward_done;
+// 	}
 
-	// Zone not triggered yet
-	if (!isZoneTriggered)
-	{
+// 	// Zone not triggered yet
+// 	if (!isZoneTriggered)
+// 	{
 
-		// Check each zone
-		if (CheckZoneBounds())
-		{
+// 		// Check each zone
+// 		if (CheckZoneBounds())
+// 		{
 
-      delay(rewDelay);
-			// Start reward
-			feed(rewDuration);
+//       delay(rewDelay);
+// 			// Start reward
+// 			feed(rewDuration);
 
-			// Print message
+// 			// Print message
 		
 
-			// Set done flag
-			reward_done = true;
+// 			// Set done flag
+// 			reward_done = true;
 
-		}
-	}
+// 		}
+// 	}
 
-	// Check if rat passed all bounds
-	if (isAllZonePassed &&
-		!isZoneTriggered)
-	{
+// 	// Check if rat passed all bounds
+// 	if (isAllZonePassed &&
+// 		!isZoneTriggered)
+// 	{
 
-		// Print reward missed
+// 		// Print reward missed
 
-		// Send missed reward msg
-		QueuePacket(&r2c, 'Z', cnt_rew, 0, zoneInd + 1, 0, true, false, false, false);
-    delay(1);
-    SendPacket(&r2c);
+// 		// Send missed reward msg
+// 		QueuePacket(&r2c, 'Z', cnt_rew, 0, zoneInd + 1, 0, true, false, false, false);
+//     delay(1);
+//     SendPacket(&r2c);
 
-		// Decriment reward count
-		cnt_rew--;
+// 		// Decriment reward count
+// 		cnt_rew--;
 
-		// Reset flags
-		RewardReset(reward_done);
+// 		// Reset flags
+// 		RewardReset(reward_done);
 
-		// Set done flag
-		reward_done = true;
+// 		// Set done flag
+// 		reward_done = true;
 
-	}
+// 	}
 
-	// Return flag
-	return reward_done;
-}
-
-
+// 	// Return flag
+// 	return reward_done;
+// }
 
 
-void SetZoneDur(int zone_ind)
-{
+
+
+// void SetZoneDur(int zone_ind)
+// {
 	
 
-	// Local vars
+// 	// Local vars
 	
 
-	// Set zone ind
-	if (zone_ind != -1)
-	{
-		zoneInd = zone_ind;
-	}
+// 	// Set zone ind
+// 	if (zone_ind != -1)
+// 	{
+// 		zoneInd = zone_ind;
+// 	}
 
-	// Find default ind
-	else {
-		for (int i = 0; i < zoneLng; i++)
-		{
-			zoneInd = zoneRewDurs[i] == durationDefault ? i : zoneInd;
-		}
-	}
+// 	// Find default ind
+// 	else {
+// 		for (int i = 0; i < zoneLng; i++)
+// 		{
+// 			zoneInd = zoneRewDurs[i] == durationDefault ? i : zoneInd;
+// 		}
+// 	}
 
-	// Set duration
-	rewDuration = zoneRewDurs[zoneInd];
+// 	// Set duration
+// 	rewDuration = zoneRewDurs[zoneInd];
 
-	// Log
-
-	
-}
-
-void SetZoneBounds(float cmd_goal)
-{
-	
-
-	// Local vars
-	
-	int diam = 0;
-	int pos_int = 0;
-	double pos_cum = 0;
-	double dist_center_cm = 0;
-	double dist_start_cm = 0;
-	double dist_end_cm = 0;
-
-	// Compute laps
-	diam = (int)(140 * PI * 100);
-	pos_int = (int)(RatPos_cm * 100);
-	lapN = round(RatPos_cm / (140 * PI) - (float)(pos_int % diam) / diam);
-	// Check if rat 'ahead' of rew pos
-	pos_cum = (double)(pos_int % diam) / 100;
-	// Add lap
-	lapN = pos_cum > cmd_goal ? lapN + 1 : lapN;
-
-	// Compute reward center
-	goalPosCum = cmd_goal + lapN*(140 * PI);
-
-	// Compute bounds for each zone
-	for (int i = zoneMin; i <= zoneMax; i++)
-	{
-		// Get zone width with overlap for center bins
-		int zone_bnd_start = zoneMin == zoneMax || i == zoneMin ?
-			rewZoneWidth / 2 : rewZoneWidth;
-		int zone_bnd_end = zoneMin == zoneMax || i == zoneMax ?
-			rewZoneWidth / 2 : rewZoneWidth;
-
-		// Compute zone bounds
-		dist_center_cm = -1 * zoneLocs[i] * ((140 * PI) / 360);
-		dist_start_cm = dist_center_cm - (zone_bnd_start * ((140 * PI) / 360));
-		dist_end_cm = dist_center_cm + (zone_bnd_end * ((140 * PI) / 360));
-
-		// Store in array
-		zoneBoundCumMin[i] = goalPosCum + dist_start_cm;
-		zoneBoundCumMax[i] = goalPosCum + dist_end_cm;
-	}
-
-	// Print message
-	
+// 	// Log
 
 	
-}
+// }
 
-bool CheckZoneBounds()
-{
+// void SetZoneBounds(float cmd_goal)
+// {
 	
 
-	// Run only if reward not already triggered
-	if (isZoneTriggered)
-	{
+// 	// Local vars
+	
+// 	int diam = 0;
+// 	int pos_int = 0;
+// 	double pos_cum = 0;
+// 	double dist_center_cm = 0;
+// 	double dist_start_cm = 0;
+// 	double dist_end_cm = 0;
+
+// 	// Compute laps
+// 	diam = (int)(140 * PI * 100);
+// 	pos_int = (int)(RatPos_cm * 100);
+// 	lapN = round(RatPos_cm / (140 * PI) - (float)(pos_int % diam) / diam);
+// 	// Check if rat 'ahead' of rew pos
+// 	pos_cum = (double)(pos_int % diam) / 100;
+// 	// Add lap
+// 	lapN = pos_cum > cmd_goal ? lapN + 1 : lapN;
+
+// 	// Compute reward center
+// 	goalPosCum = cmd_goal + lapN*(140 * PI);
+
+// 	// Compute bounds for each zone
+// 	for (int i = zoneMin; i <= zoneMax; i++)
+// 	{
+// 		// Get zone width with overlap for center bins
+// 		int zone_bnd_start = zoneMin == zoneMax || i == zoneMin ?
+// 			rewZoneWidth / 2 : rewZoneWidth;
+// 		int zone_bnd_end = zoneMin == zoneMax || i == zoneMax ?
+// 			rewZoneWidth / 2 : rewZoneWidth;
+
+// 		// Compute zone bounds
+// 		dist_center_cm = -1 * zoneLocs[i] * ((140 * PI) / 360);
+// 		dist_start_cm = dist_center_cm - (zone_bnd_start * ((140 * PI) / 360));
+// 		dist_end_cm = dist_center_cm + (zone_bnd_end * ((140 * PI) / 360));
+
+// 		// Store in array
+// 		zoneBoundCumMin[i] = goalPosCum + dist_start_cm;
+// 		zoneBoundCumMax[i] = goalPosCum + dist_end_cm;
+// 	}
+
+// 	// Print message
+	
+
+	
+// }
+
+// bool CheckZoneBounds()
+// {
+	
+
+// 	// Run only if reward not already triggered
+// 	if (isZoneTriggered)
+// 	{
 		
-		return isZoneTriggered;
-	}
+// 		return isZoneTriggered;
+// 	}
 
-	// Bail if pos data not new
-	if (!is_ekfNew)
-	{
+// 	// Bail if pos data not new
+// 	if (!is_ekfNew)
+// 	{
 		
-		return isZoneTriggered;
-	}
+// 		return isZoneTriggered;
+// 	}
 
-	// Reset flag
-	is_ekfNew = false;
+// 	// Reset flag
+// 	is_ekfNew = false;
 
-	// Check if all bounds passed
-	if (RatPos_cm > zoneBoundCumMax[zoneMax] + 5)
-	{
-		isAllZonePassed = true;
+// 	// Check if all bounds passed
+// 	if (RatPos_cm > zoneBoundCumMax[zoneMax] + 5)
+// 	{
+// 		isAllZonePassed = true;
 		
-		return isZoneTriggered;
-	}
+// 		return isZoneTriggered;
+// 	}
 
-	// Bail if first bound not reached
-	if (RatPos_cm < zoneBoundCumMin[zoneMin])
-	{
+// 	// Bail if first bound not reached
+// 	if (RatPos_cm < zoneBoundCumMin[zoneMin])
+// 	{
 		
-		return isZoneTriggered;
-	}
+// 		return isZoneTriggered;
+// 	}
 
-	// Check if rat in any bounds
-	for (int i = zoneMin; i <= zoneMax; i++)
-	{
-		if (
-			RatPos_cm > zoneBoundCumMin[i] &&
-			RatPos_cm < zoneBoundCumMax[i]
-			)
-		{
+// 	// Check if rat in any bounds
+// 	for (int i = zoneMin; i <= zoneMax; i++)
+// 	{
+// 		if (
+// 			RatPos_cm > zoneBoundCumMin[i] &&
+// 			RatPos_cm < zoneBoundCumMax[i]
+// 			)
+// 		{
 
-			// Update timers
-			t_lastZoneCheck = t_lastZoneCheck == 0 ? millis() : t_lastZoneCheck;
-			t_nowZoneCheck = millis();
+// 			// Update timers
+// 			t_lastZoneCheck = t_lastZoneCheck == 0 ? millis() : t_lastZoneCheck;
+// 			t_nowZoneCheck = millis();
 
-			// Store occupancy time
-			zoneOccTim[i] += t_nowZoneCheck - t_lastZoneCheck;
-			zoneOccCnt[i]++;
-			t_lastZoneCheck = t_nowZoneCheck;
+// 			// Store occupancy time
+// 			zoneOccTim[i] += t_nowZoneCheck - t_lastZoneCheck;
+// 			zoneOccCnt[i]++;
+// 			t_lastZoneCheck = t_nowZoneCheck;
 
-			// Check if occ thresh passed
-			if (zoneOccTim[i] >= rewDelay)
-			{
+// 			// Check if occ thresh passed
+// 			if (zoneOccTim[i] >= rewDelay)
+// 			{
 
-				// REWARD at this pos
-				SetZoneDur(i);
+// 				// REWARD at this pos
+// 				SetZoneDur(i);
 
-				// Store reward info for debugging
-				zoneRewarded = zoneLocs[i] * -1;
-				zoneBoundCumRewarded[0] = zoneBoundCumMin[i];
-				zoneBoundCumRewarded[1] = zoneBoundCumMax[i];
-				occRewarded = zoneOccTim[i];
+// 				// Store reward info for debugging
+// 				zoneRewarded = zoneLocs[i] * -1;
+// 				zoneBoundCumRewarded[0] = zoneBoundCumMin[i];
+// 				zoneBoundCumRewarded[1] = zoneBoundCumMax[i];
+// 				occRewarded = zoneOccTim[i];
 
-				// Set flag
-				isZoneTriggered = true;
-			}
-		}
-	}
-
-	
-	return isZoneTriggered;
-}
-
-
-
-void RewardReset(bool was_rewarded)
-{
-	
-
-	// Local vars
-
-	// Log event
-	
+// 				// Set flag
+// 				isZoneTriggered = true;
+// 			}
+// 		}
+// 	}
 
 	
-	// Reset flags etc
-	isRewarding = false;
-	isZoneTriggered = false;
-	isAllZonePassed = false;
-	is_ekfNew = false;
+// 	return isZoneTriggered;
+// }
 
-	// Reset occ time
-	for (int i = 0; i < zoneLng; i++)
-	{
-		zoneOccTim[i] = 0;
-		zoneOccCnt[i] = 0;
-	}
-	t_nowZoneCheck = 0;
-	t_lastZoneCheck = 0;
+
+
+// void RewardReset(bool was_rewarded)
+// {
+	
+
+// 	// Local vars
+
+// 	// Log event
+	
 
 	
-}
+// 	// Reset flags etc
+// 	isRewarding = false;
+// 	isZoneTriggered = false;
+// 	isAllZonePassed = false;
+// 	is_ekfNew = false;
+
+// 	// Reset occ time
+// 	for (int i = 0; i < zoneLng; i++)
+// 	{
+// 		zoneOccTim[i] = 0;
+// 		zoneOccCnt[i] = 0;
+// 	}
+// 	t_nowZoneCheck = 0;
+// 	t_lastZoneCheck = 0;
+
+	
+// }
 
 
 ////////////////////////////// Auxiliary Motor Functions ///////////////////////////////////////////
