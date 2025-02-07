@@ -36,7 +36,7 @@ byte sesTask;
 byte sesSound;
 double sesSetpointHeadDist;
 int pumpOpenScale;
-int bullDel;
+//int bullDel;
 int bullSpeed;
 int cnt_logBytesStored;
 int rewDurationMs = 0; // (ms) 
@@ -61,6 +61,7 @@ byte cnt_move;
 float moveTarg;
 double posDiff;
 int packNum = 0;
+int lastPackNumRcvd = 0;
 
 
 
@@ -84,12 +85,18 @@ bool isEtohPressed = false;
 bool isFeedPressed = false;
 bool isHalted;
 bool isMoving = false;
+bool isMovePack = false;
 bool isLEDon = true;
 bool isMoveReady = false;
 bool isRewardPending = false;
 bool isRobotInFeedPosition = false;
 bool isRobotBulldozing = false;
 bool isBulldozeDone = false;
+bool isRewarding = false;
+bool isMoveInterrupted = false;
+bool isSendingPacket = false;
+bool isSessionStarted = false;
+
 
 // Time Variables
 int ratStopTime;
@@ -113,6 +120,8 @@ void retractFeederPlate(L6474 myL6474);
 void stopRobot();
 void stopRobotSlow();
 void checkMove();
+void checkPreviousMove();
+void serialFlush();
 
 
 // create 4 states for switch debounce
@@ -153,13 +162,17 @@ void setup() {
   ButtonSetup();
   LCDSetup();
   PumpSetup();
-  SDCardSetup();
+  //SDCardSetup();
   // MotorsSetup(); 
   // L6470_setup();
   
-  myL6474.SetMaxSpeed(0,4000);
-  myL6474.SetMinSpeed(0,1000);
-  myL6474.SetAcceleration(0, 1000);
+  // myL6474.SetMaxSpeed(0,4000);
+  // myL6474.SetMinSpeed(0,1000);
+  // myL6474.SetAcceleration(0, 1000);
+ 
+  myL6474.SetMaxSpeed(0,3000);
+  myL6474.SetMinSpeed(0,300);
+  myL6474.SetAcceleration(0, 500);
   myL6474.SetDeceleration(0, 3300);
   myL6474.SelectStepMode(0, L6474_STEP_SEL_1_4, 1);
 
@@ -186,6 +199,8 @@ void setup() {
 
   attachInterrupt(digitalPinToInterrupt(19), stopRobot, RISING);
 
+  
+
 }
 
 void loop() {
@@ -199,7 +214,15 @@ void loop() {
     isMoving = false;
   }
 
-  
+  if (isSessionStarted == true){
+
+    // Pump Ethanol every 10 seconds
+    if (millis() % 10000 < 1000){
+      digitalWrite(5, HIGH);
+      delay(1000);
+      digitalWrite(5, LOW);
+    }
+  }
 
 
 
@@ -215,30 +238,71 @@ void loop() {
 
   if (isRewardPending == true && isRobotInFeedPosition == true){
     myL6474.HardStop(0, 1);
+    writeLCD("Rewarding...", 0);
     isMoving = false;
     delay(10);
     feed(rewDurationMs);
     Serial.print("Rewarded for "); 
     Serial.println(rewDurationMs);
     isRewardPending = false;
+    clearLCD();
   }
 
   if (isRobotBulldozing == true)
   {
-	  myL6474.SetMaxSpeed(0,2000);
+    //writeLCD("Start Bulldoze", 0);
+    //delay(1000);
+    // if (isBulldozeDone == false)
+    // {
+	  myL6474.SetMaxSpeed(0, bullSpeed);
   	myL6474.SetMinSpeed(0,500);
   	myL6474.SetAcceleration(0, 500);
+    //clearLCD();
+    writeLCD("Bulldozing", 0);
+    delay(10);
     myL6474.Run(0, FORWARD, 1);
-    isBulldozeDone = true;
-  }
+    delay(7000);
+   // isBulldozeDone = true;
+  // }
 
-   if (isBulldozeDone == true)
-   {
-	  myL6474.SetMaxSpeed(0,4000);
-  	myL6474.SetMinSpeed(0,1000);
-  	myL6474.SetAcceleration(0, 1000);
-	  isRobotBulldozing = false;
-	  isBulldozeDone = false;
+  //  if (isBulldozeDone == true)
+  //  {
+    
+    myL6474.HardStop(0, 1);
+    delay(10);
+    clearLCD();
+    
+    //writeLCD("Stopped Bulldozing", 0);
+    // delay(5);
+    // clearLCD();
+
+    isRobotBulldozing = false;
+    //writeLCD("Sending Stop Packet", 0);
+    //QueuePacket(&r2c, 'B', 1, 0, 0, packNum, false, true, true, true);
+    for (int i = 0; i < 10; i++)
+    {
+      QueuePacket(&r2c, 'B', 1, 0, 0, packNum, false, true, true, true);
+      delay(1);
+      SendPacket(&r2c);
+    }
+    // delay(1000);
+    // clearLCD();
+    delay(10);
+    
+    //SendPacket(&r2c);
+	  myL6474.SetMaxSpeed(0,3000);
+    myL6474.SetMinSpeed(0,300);
+    myL6474.SetAcceleration(0, 500);
+	  
+    myL6474.HardStop(0, 1);
+
+    checkPreviousMove();
+    // writeLCD("isRobotBulldozing", 0);
+    // writeLCD("False", 1);
+    // delay (1000);
+    // clearLCD();
+
+	 // isBulldozeDone = false;
    }
   
   // Get Data from CheetahDue
@@ -297,18 +361,19 @@ void loop() {
   // Pump Ethanol using button on robot
   if (!(PINC & (1 << PINC5))) {
     Serial.println("B7 pressed");
-    clearLCD();
-    writeLCD("Priming ethanol motor", 0);
+    //clearLCD();
+    writeLCD("Pumping:", 0);
+    writeLCD("Ethanol motor", 1);
     Serial.println("Button Pressed");
     digitalWrite(5, HIGH);
-    clearLCD();
-    isFeedPressed = true;
+    isEtohPressed = true;
   }
   else {  
-    if (isFeedPressed == true){
+    if (isEtohPressed == true){
       digitalWrite(5, LOW);
        Serial.println("B7  NOT pressed");
-      isFeedPressed = false;
+      isEtohPressed = false;
+      clearLCD();
     }
   }
 
@@ -316,23 +381,24 @@ void loop() {
 
 //  Pump Food using button on robot
   if (!(PINC & (1 << PINC3))) {
-    clearLCD();
-    writeLCD("Priming Feeding Pump", 0);
+    //clearLCD();
+    writeLCD("Pumping:", 0);
+    writeLCD("Food motor", 1);
     digitalWrite(4, HIGH);
-    clearLCD();
-    isEtohPressed = true;
+    isFeedPressed = true;
   }
 
 else {
-  if (isEtohPressed == true){
+  if (isFeedPressed == true){
     digitalWrite(4, LOW);
-    isEtohPressed = false;
+    clearLCD();
+    isFeedPressed = false;
   }
 }
 
 //   Do Feeding Routine using button on robot
   if (!(PINC & (1 << PINC1))) {
-    clearLCD();
+    //clearLCD();
     writeLCD("Feeding Routine", 0);
     feed(900);   
     clearLCD();
@@ -345,11 +411,10 @@ if (!(PINC & (1 << PINC4)) ){
   Serial.println("Button Pressed");
 
     Serial.println("Move Forward");
-    clearLCD();
+    //clearLCD();
     writeLCD("Moving Forward...", 0);
     myL6474.Run(0, FORWARD, 1);
     // delay(2000);
-    clearLCD();
     isMoveForwardPressed = true;
   }
 while (!(PINC & (1 << PINC4)) ){
@@ -369,11 +434,11 @@ if (!(PINC & (1 << PINC2)) ){
   Serial.println("Button Pressed");
 
     Serial.println("Move Backward");
-    clearLCD();
+    //clearLCD();
     writeLCD("Moving Backward...", 0);
     myL6474.Run(0, BACKWARD, 1);
     // delay(2000);
-    clearLCD();
+    //clearLCD();
     isMoveBackwardPressed = true;
   }
 while (!(PINC & (1 << PINC2)) ){
@@ -387,23 +452,27 @@ if (isMoveBackwardPressed == true){
   myL6474.HardStop(0, 1);
 }
   
-// Turn LED On/Off using button on robot
+// Turn LCD Backlight On/Off using button on robot
 if (!(PINC & (1 << PINC0)) ){
 Serial.println("Button Pressed");
 
   if (isLEDon == true){
     Serial.println("Turning LED Off");
-    clearLCD();
-    writeLCD("Turning LED Off...", 0);
-    digitalWrite(LED, LOW);
+    //clearLCD();
+    writeLCD("Turning LCD Backlight", 0);
+    writeLCD("On", 1);
+    LCDBacklightOn();
+    //digitalWrite(LED, LOW);
     clearLCD();
     isLEDon = false;
   }
   else{
     Serial.println("Turning LED Off");
-    clearLCD();
-    writeLCD("Turning LED Off...", 0);
-    digitalWrite(LED, HIGH);
+    //clearLCD();
+    writeLCD("Turning LCD Backlight", 0);
+    writeLCD("Off", 1);
+    LCDBacklightOff();
+    //digitalWrite(LED, HIGH);
     clearLCD();
     isLEDon = true;
   }
@@ -432,20 +501,20 @@ Serial.println("Button Pressed");
   
     // button justt released
     case debounce_release:
-    Serial.println("Feeding...");
-    clearLCD();
-    writeLCD("Feeding...", 0);
+    // Serial.println("Feeding...");
+    // clearLCD();
+    // writeLCD("Feeding...", 0);
     // feederPlate();
     // delay(10);
     // QueuePacket(&r2c, 'h', 1, 0, 0, 0, true, false, false, false);
     // delay(10);
     // pumpFood(400);
-    delay(2);
-    Serial.println("End");
-    clearLCD();
-    delay(2);
-    timeStr = getCurrentTime(logTimerStartMs);
-    writeToSDCard(timeStr, "Test Message", "testFile3.txt");
+    // delay(2);
+    // Serial.println("End");
+    // clearLCD();
+    // delay(2);
+    // timeStr = getCurrentTime(logTimerStartMs);
+    // writeToSDCard(timeStr, "Test Message", "testFile3.txt");
     pbstate = wait_press;
     break;
   }
@@ -463,7 +532,7 @@ ISR(PCINT0_vect) {
   if (pbstate == wait_press) {
     pbstate = debounce_press;
   } else if (pbstate == wait_release) {
-    Serial.println("Release");
+    //Serial.println("Release");
     pbstate = debounce_release;
   }
 }
@@ -523,6 +592,7 @@ void sysTest(){
 */
 void feed(int rewDuration){
     cnt_rew++;
+    isRewarding = true;
     Serial.println(rewDuration);
     delay(10);
     extendFeederPlate(myL6474);
@@ -540,11 +610,14 @@ void feed(int rewDuration){
     delay(7000); // update to 20 seconds delay
 
     retractFeederPlate(myL6474);
-    for (int i=0; i<5; i++){
+    for (int i=0; i<10; i++){
       QueuePacket(&r2c, 'R', 9, 9, 9, packNum+1, false, true, true, true);
       delay(5);
       SendPacket(&r2c);
     }
+
+    isRewarding = false;
+    checkPreviousMove();
 }
 
 
@@ -707,6 +780,14 @@ bool SendPacket(R2_COM<HardwareSerial> *p_r2) {
   [8]footer
   */
 
+  isSendingPacket = true;
+
+  // clearLCD();
+  // writeLCD("Sending Packet", 0);
+  // delay (1000);
+  // clearLCD();
+  //serialFlush();
+
   // Local vars
   static char buff_lrg[buffLrg] = {0};
   buff_lrg[0] = '\0';
@@ -860,6 +941,8 @@ bool SendPacket(R2_COM<HardwareSerial> *p_r2) {
   p_r2->t_sentArr[id_ind] = p_r2->t_sent;
 
    Serial.println("Done sending data");
+
+  isSendingPacket = false;
 
   return true;
 }
@@ -1018,6 +1101,10 @@ byte WaitBuffRead(R4_COM<HardwareSerial> *p_r4, char mtch = '\0') {
 void GetSerial(R4_COM<HardwareSerial> *p_r4) {
   //Serial.println("Get serial");
 
+  // writeLCD("Get Serial", 0);
+  // delay(1500);
+  // clearLCD();
+
   /*
   PARSE DATA FROM CS
   FORMAT: [0]head, [1]id, [2:5]dat[0], [6:9]dat[1], [10:13]dat[1], [14:15]pack,
@@ -1100,6 +1187,7 @@ void GetSerial(R4_COM<HardwareSerial> *p_r4) {
 
   // Store header
   head = b;
+
   // Serial.print("Header: ");
   // Serial.println(head);
   // Serial.print(head);
@@ -1130,402 +1218,14 @@ void GetSerial(R4_COM<HardwareSerial> *p_r4) {
   U.b[0] = WaitBuffRead(p_r4);
   U.b[1] = WaitBuffRead(p_r4);
   pack = U.i16[0];
+  
 
   // Serial.println("Incoming Data");
   // Serial.println(id);
   // Serial.println(c2r.dat[0]);
   // Serial.println(c2r.dat[1]);
   // Serial.println(c2r.dat[2]);
-    Serial.println("ID:  " + id);
-  switch (id) {
-  case ('h'):
-    Serial.println("Case h");
-    // Serial.println(c2r.dat[0]);
-    // Serial.println(c2r.dat[1]);
-    // Serial.println(c2r.dat[2]);
-
-    if (c2r.dat[0] == 1) {
-      isHandshakeDone1 = true;
-      QueuePacket(&r2c, 'h', 1, 0, 0, 0, false, true, true, true);  
-      delay(1);
-      SendPacket(&r2c);
-    }
-
-    if (c2r.dat[0] == 2) {
-      isHandshakeDone2 = true;
-      QueuePacket(&r2c, 'h', 2, 0, 0, 0, false, true, true, true);
-      delay(1);
-      LCDBacklightOff();
-    }
-
-    break;
-
-  case ('T'):
-    Serial.println("Case T");
-    QueuePacket(&r2c, 'T', 0, 0, 0, 0, true, true, true, false);
-    delay(1);
-    SendPacket(&r2c);
-    break;
-
-  case ('K'):
-    Serial.println("Case K");
-    break;
-
-  case ('I'):
-    Serial.println("Case I");
-    is_RatOnTrack = c2r.dat[0] == 1 ? true : false;
-    isInitialMoveDone = true;
-    break;
-  
-  case ('B'):
-    Serial.println("Case B");
-    bullDel = c2r.dat[0];
-		bullSpeed = c2r.dat[1];
-    QueuePacket(&r2a, 'b', 1, 0, 0, 0, false, false);
-    QueuePacket(&r2a, 'b', 0, 0, 0, 0, false, false);
-    isSetupComplete = true;
-    isRobotBulldozing = true;
-    break;
-    
-  case ('H'):
-    myL6474.HardStop(0, 1);
-    QueuePacket(&r2c, 'H', c2r.dat[0], c2r.dat[1], c2r.dat[2], packNum, false, true, true, true);
-    delay(5);
-    SendPacket(&r2c);
-    Serial.println("Case H");
-    
-    if (dat[0] == 1){
-      isHalted = true;
-      
-    }
-    else if (dat[0] == 2){
-      isHalted = false;
-    }
-    //myL6474.HardStop(0, 1);
-    isMoving = false;
-    break;
-  case ('M'):
-    QueuePacket(&r2c, 'M', c2r.dat[0], c2r.dat[1], c2r.dat[2], packNum, false, true, true, true);
-     delay(5);
-     SendPacket(&r2c);
-    Serial.println("Case M");
-    // delay(1000);
-    Serial.println(c2r.dat[0]);
-    Serial.println(c2r.dat[1]);
-    Serial.println(c2r.dat[2]);
-    cnt_move = (byte)c2r.dat[0];
-		moveTarg = c2r.dat[1];
-
-  if ((proxSensorVal != 0) && pack != packNum){
-    Serial.println("Move Packet");
-     
-    if (isHalted == false){
-      Serial.println("Move Forward");
-      clearLCD();
-      writeLCD("Moving Forward...", 0);
-      myL6474.Run(0, FORWARD, 1);
-      delay(2000);
-      isMoving = true;
-    }
-
-  }
-  
-
-    // if (cnt_move == 0 || cnt_move == 1){
-    //   QueuePacket(&r2c, 'M', 0, 0, 0, c2r.packArr[ID_Ind<R4_COM<HardwareSerial>>('M', &c2r)], true, false, true);
-    //   delay(1);
-    //   SendPacket(&r2c);
-    // }
-
-    // delay(10);
-   
-    // else{
-    //     myL6474.HardStop(0,0);
-    // }
-
-    // isInitialMoveDone = true;
-    if (cnt_move == 1){
-      isFirstMove = true;
-    }
-    else if (cnt_move == 0){
-      isFirstMove = false;
-    }
-    
-    break;
-
-  case ('P'):
-    Serial.println("Case P");
-    // Serial.println(c2r.dat[0]);
-    // Serial.println(c2r.dat[1]);
-    // Serial.println(c2r.dat[2]);
-
-    // if (isInitialMoveDone == true){
-      if (c2r.dat[0] == 0) {
-        RatPos_cm = c2r.dat[1];
-        RatPos_rad = RatPos_cm / ((140 * PI) / (2 * PI));
-      }
-      else {
-        RobPos_cm = c2r.dat[1];
-        RobPos_rad = RobPos_cm / ((140 * PI) / (2 * PI));
-      }
-      if (!is_streamStarted){ 
-        is_streamStarted = true;
-        QueuePacket(&r2c, 'K', 1, 0, 0, 0, true, false);
-        delay(1);
-        SendPacket(&r2c);
-      }
-      else{
-        posDiff = (abs(RatPos_cm - RobPos_cm));
-        if(posDiff > 55){
-          
-
-          if (myL6474.GetShieldState(0) == INACTIVE && isHalted == false){
-            myL6474.Run(0, FORWARD, 1);
-            pumpEtoh();
-
-          }
-          
-        }
-        else{
-          myL6474.HardStop(0, 1);
-        }
-      }
-
-      // if (isInitialMoveDone == true){
-
-      //   motorSpeed = GetPID(moveTarg, RobPos_rad);
-      //   myL6474.Run(0, FORWARD, 0);
-      //   delay(motorSpeed);
-      //   myL6474.HardStop(0, 0);
-
-      // }
-      
-      
-    // }
-
-    break;
-
-  case ('U'):
-  // Send number of log bytes being sent
-			QueuePacket(&r2c, 'U', cnt_logBytesStored, 0, 0, 0, true, false);
-      delay(1);
-      SendPacket(&r2c);
-
-  break;
-
-  case ('L'):
-    Serial.println("Case L");
-    do_LogSend = c2r.dat[0] == 1 ? true : false;
-
-    if (!do_LogSend)
-		{
-
-			// Log
-
-			// Send number of log bytes being sent
-			QueuePacket(&r2c, 'U', cnt_logBytesStored, 0, 0, 0, true, false);
-      delay(1);
-      SendPacket(&r2c);
-
-			
-		}
-    break;
-
-  case ('Q'):
-    Serial.println("Case Q");
-    QueuePacket(&r2a, 'q', 0, 0, 0, 0, true, false);
-    delay(1);
-    SendPacket(&r2a);
-    break;
-
-case ('S'):
-    Serial.println("Case S");
-    QueuePacket(&r2c, 'S', 0, 0, 0, 0, true, true);
-    delay(1);
-    SendPacket(&r2c);
-    // Store message data
-		sesMsg = (byte)c2r.dat[0];
-
-		// Store info from first 'S' packet
-		if (sesMsg == 1)
-		{
-			sesCond = (byte)c2r.dat[1];
-			sesTask = (byte)c2r.dat[2];
-		}
-
-		// Store info from second 'S' packet
-		if (sesMsg == 2)
-		{
-			sesSound = (byte)c2r.dat[1];
-			sesSetpointHeadDist = c2r.dat[2];
-		}
-
-		// Handle first 'S' packet
-		if (sesMsg == 1)
-		{
-
-			// Reset flags
-			is_ManualSes = false;
-			is_ForageTask = false;
-
-			// Handle Manual session
-			if (sesCond == 1)
-			{
-				// Turn on LCD light
-				LCDoff();
-				// Set flag
-				is_ManualSes = true;
-			}
-
-			// Handle Behavior session
-			if (sesCond == 2){}
-
-			// Handle Implant session
-			if (sesCond == 3){}
-
-			// Handle Track task
-			if (sesTask == 1)
-			{
-				// Set rew led min
-				// rewLEDduty[0] = 0;
-
-				// Change reward solonoid on scale
-				pumpOpenScale = 1;
-			}
-
-			// Handle Forage task
-			if (sesTask == 2)
-			{
-
-				// Set rew led forage min
-				// rewLEDduty[0] = 2;
-
-				// Set to min
-				// analogWrite(pin.LED_REW_C, rewLEDduty[0]);
-				// analogWrite(pin.LED_REW_R, rewLEDduty[0]);
-
-				// Change reward solonoid on scale
-				pumpOpenScale = 0.5;
-
-				// Set flag
-				is_ForageTask = true;
-			}
-
-		}
-
-		// Handle second 'S' packet
-		if (sesMsg == 2)
-		{
-
-			// Handle no sound condition
-			if (sesSound == 0)
-			{
-
-				// No sound
-				QueuePacket(&r2a, 's', 0, 0, 0, 0, false, false);
-        delay(1);
-        SendPacket(&r2a);
-			}
-
-			// Handle white noise only condition
-			if (sesSound == 1)
-			{
-
-				// Use white noise only
-				QueuePacket(&r2a, 's', 1, 0, 0, 0, false, false);
-        delay(1);
-        SendPacket(&r2a);
-			}
-
-			// Handle white noise and reward tone condition
-			if (sesSound == 2)
-			{
-				// Use white and reward noise
-				QueuePacket(&r2a, 's', 2, 0, 0, 0, false, false, false);
-        delay(1);
-        SendPacket(&r2a);
-			}
-
-			// Compute and store pid setpoint
-			PIDsetPoint = setPointHead + sesSetpointHeadDist;
-
-			// Update tracker feeder pass distance
-			// feedTrackPastDist = feedDist + feedHeadPastDist + sesSetpointHeadDist;
-
-			// Log set setpoint
-
-			// Log feed pass distance
-		
-
-		}
-    break;
-
-  case ('R'):
-    QueuePacket(&r2c, 'R', c2r.dat[0], c2r.dat[1], c2r.dat[2], packNum, false, true, true, true);
-    delay(5);
-    SendPacket(&r2c);
-
-   /* 1ml      = 900ms     -  2.5s
-      0.75ml   = 675ms     -  1.85s
-      0.6ml    = 540ms     -  1.42s
-      0.425ml  = 410ms     -  0.9s
-      0.25ml   = 250ms     -  0.5s
-  */
-    //c2r.dat[0];
-    
-    if (dat[0] == (float)1){
-      rewDurationMs = 250;
-    }
-    else if (dat[0] == (float)2){
-      rewDurationMs = 410;
-    }
-    else if (dat[0]  == (float)3){
-      rewDurationMs = 540;
-    }
-    else if (dat[0]  == (float)4){
-      rewDurationMs = 675;
-    }
-    else if (dat[0]  == (float)5){
-      rewDurationMs = 900;
-    }
-    
-    Serial.print("dat[0]: ");
-    Serial.println(dat[0]);
-    Serial.print("dat[1]: ");
-    Serial.println(dat[1]);
-    Serial.print("dat[2]: ");
-    Serial.println(dat[2]);
-
-    isRewardPending = true;
-
-    checkMove();
-    // pumpFood(400);
-   // myL6474.HardStop(0, 1);
-   
-    
-    // delay(100);
-    // for(int i; i<100; i++){
-      
-    //   delay(100);
-    // }
-
-
-    //ProcRewCmd(dat[0], dat[1], dat[2]);
-  
-    // RunReward();
-    // feed(rewDuration);
-    // Serial.print(rewDuration);
-    // delay(10);
-    // QueuePacket(&r2c, 'O', 0, 0, 0, 0, false, true);
-    // SendPacket(&r2c);
-    
-    // Serial.println(c2r.dat[0]);
-    // Serial.println(c2r.dat[1]);
-    // Serial.println(c2r.dat[2]);
-    
-    break;
-  }
-
+  Serial.println("ID:  " + id);
   
   packNum = pack;
 
@@ -1586,10 +1286,13 @@ case ('S'):
   }
 
   // Footer found so process packet
-  else {
+ // else {
 
     // Send confirmation
     if (do_conf) {
+      // writeLCD("Sending Confirmation Confirm", 0);
+      // delay(1000);
+      // clearLCD();
       Serial.println("Do Confirm");
       QueuePacket(p_r2, id, dat[0], dat[1], dat[2], pack, false, true);
       delay(5);
@@ -1625,16 +1328,25 @@ case ('S'):
       pack_last = p_r4->packConfArr[r4_ind];
 
     // Flag repeat pack
-    is_repeat = pack == pack_last;
+    is_repeat = pack < pack_last || pack == pack_last;
+
+    // if (is_repeat) {
+    //   writeLCD("is Repeat", 0);
+    //   writeLCD("True", 1);
+    //   delay (1000);
+    //   clearLCD();
+    // }
+    // else{
+    //   writeLCD("is Repeat", 0);
+    //   writeLCD("True", 1);
+    //   delay (1000);
+    //   clearLCD();
+    // }
 
     // Incriment repeat count
     p_r4->cnt_repeat += is_repeat || is_resend ? 1 : 0;
 
-    // Update packet history
-    if (!is_conf)
-      p_r4->packArr[r4_ind] = pack;
-    else
-      p_r4->packConfArr[r4_ind] = pack;
+    
 
     // Update data
     p_r4->dat[0] = dat[0];
@@ -1672,7 +1384,471 @@ case ('S'):
       p_r4->idNew = id;
       p_r4->is_new = true;
     }
+  //}
+
+  if (is_repeat == false){
+
+    // Update packet history
+    if (!is_conf)
+      p_r4->packArr[r4_ind] = pack;
+    else
+      p_r4->packConfArr[r4_ind] = pack;
+
+
+    // writeLCD("Processing Packet", 0);
+    // delay (1000);
+    // clearLCD();
+
+  switch (id) {
+  case ('h'):
+  
+    // writeLCD("Received 'h' Packet", 0);
+    // delay(1500);
+    // clearLCD();
+
+    Serial.println("Case h");
+    // Serial.println(c2r.dat[0]);
+    // Serial.println(c2r.dat[1]);
+    // Serial.println(c2r.dat[2]);
+
+    if (dat[0] == (float)1) {
+      isHandshakeDone1 = true;
+      QueuePacket(&r2c, 'h', 1, 0, 0, 0, false, true, true, true);  
+      delay(1);
+      SendPacket(&r2c);
+    }
+ 
+    if (dat[0] == (float)2) {
+      isHandshakeDone2 = true;
+      QueuePacket(&r2c, 'h', 2, 0, 0, 0, false, true, true, true);
+      delay(1);
+      LCDBacklightOff();
+    }
+
+    break;
+  
+  case ('B'):
+    // writeLCD("Received 'B' Packet", 0);
+    // delay (1000);
+    // clearLCD();
+    if (isRobotBulldozing == false && dat[0] > (float)0){ 
+      // writeLCD("Bulldoze Ready", 0);
+      // delay (1000);
+      // clearLCD();
+      Serial.println("Case B");
+      //bullDel = (float)dat[0];
+      bullSpeed = (float)dat[1];
+      // QueuePacket(&r2c, 'B', 0, 0, 0, packNum, false, true, true, true);
+      // delay(5);
+      // SendPacket(&r2c);
+      //serialFlush();
+      //isSetupComplete = true;
+      isRobotBulldozing = true;
+      // writeLCD("isRobotBulldozing", 0);
+      // writeLCD("True", 1);
+      // delay (1000);
+      // clearLCD();
+    }
+    else if (dat[0] == (float)0){
+      // writeLCD("Bulldoze NOT Ready", 0);
+      // delay (1000);
+      // clearLCD();
+      isRobotBulldozing = false;
+      myL6474.HardStop(0, 1);
+      // writeLCD("isRobotBulldozing", 0);
+      // writeLCD("False", 1);
+      // delay (1000);
+      // clearLCD();
+      
+    }
+    // else {
+    //   serialFlush();
+    // }
+    break;
+    
+  case ('H'):
+
+    // writeLCD("Received 'H' Packet", 0);
+    // delay(1500);
+    // clearLCD();
+
+    myL6474.HardStop(0, 1);
+    QueuePacket(&r2c, 'H', c2r.dat[0], c2r.dat[1], c2r.dat[2], packNum, false, true, true, true);
+    delay(5);
+    SendPacket(&r2c);
+    Serial.println("Case H");
+    
+    if (dat[0] == 1){
+      isHalted = true;
+      writeLCD("Halted", 0);
+      
+    }
+    else if (dat[0] == 2){
+      isHalted = false;
+      clearLCD();
+    }
+    //myL6474.HardStop(0, 1);
+    isMoving = false;
+    break;
+  case ('M'):
+
+    // writeLCD("Received 'M' Packet", 0);
+    // delay(1500);
+    // clearLCD();
+
+    QueuePacket(&r2c, 'M', c2r.dat[0], c2r.dat[1], c2r.dat[2], packNum, false, true, true, true);
+     delay(5);
+    //  for (int i = 0; i < 10; i++) {
+    //    Serial.println(c2r.dat[i]);
+    //  }
+     SendPacket(&r2c);
+     
+     delay(10);
+     //serialFlush();
+    Serial.println("Case M");
+    // delay(1000);
+    Serial.println(c2r.dat[0]);
+    Serial.println(c2r.dat[1]);
+    Serial.println(c2r.dat[2]);
+    cnt_move = (byte)c2r.dat[0];
+		moveTarg = c2r.dat[1];
+
+  if (isSessionStarted == false){
+      isSessionStarted = true;
+    }
+    
+     
+  //  if (isHalted == false){
+      isMovePack = true;
+      Serial.println("Move Forward");
+      writeLCD("Moving Forward...", 0);
+      myL6474.Run(0, FORWARD, 1);
+      delay(10000);
+      isMoving = true;
+  //  }
+
+  //}
+  
+
+    // if (cnt_move == 0 || cnt_move == 1){
+    //   QueuePacket(&r2c, 'M', 0, 0, 0, c2r.packArr[ID_Ind<R4_COM<HardwareSerial>>('M', &c2r)], true, false, true);
+    //   delay(1);
+    //   SendPacket(&r2c);
+    // }
+
+    // delay(10);
+   
+    // else{
+    //     myL6474.HardStop(0,0);
+    // }
+
+    // isInitialMoveDone = true;
+    // if (cnt_move == 1){
+    //   isFirstMove = true;
+    // }
+    // else if (cnt_move == 0){
+    //   isFirstMove = false;
+    // }
+
+    
+    break;
+    
+  case ('R'):
+
+  //   writeLCD("Received 'R' Packet", 0);
+  //  delay(1500);
+  //   clearLCD();
+
+    QueuePacket(&r2c, 'R', c2r.dat[0], c2r.dat[1], c2r.dat[2], packNum, false, true, true, true);
+    delay(5);
+    SendPacket(&r2c);
+  //  serialFlush();
+
+   /* 1ml      = 900ms     -  2.5s
+      0.75ml   = 675ms     -  1.85s
+      0.6ml    = 540ms     -  1.42s
+      0.425ml  = 410ms     -  0.9s
+      0.25ml   = 250ms     -  0.5s
+  */
+    //c2r.dat[0];
+    
+    if (dat[0] == (float)1){
+      rewDurationMs = 250;
+    }
+    else if (dat[0] == (float)2){
+      rewDurationMs = 410;
+    }
+    else if (dat[0]  == (float)3){
+      rewDurationMs = 540;
+    }
+    else if (dat[0]  == (float)4){
+      rewDurationMs = 675;
+    }
+    else if (dat[0]  == (float)5){
+      rewDurationMs = 900;
+    }
+    
+    // Serial.print("dat[0]: ");
+    // Serial.println(dat[0]);
+    // Serial.print("dat[1]: ");
+    // Serial.println(dat[1]);
+    // Serial.print("dat[2]: ");
+    // Serial.println(dat[2]);
+
+    isRewardPending = true;
+
+    checkPreviousMove();
+    // pumpFood(400);
+   // myL6474.HardStop(0, 1);
+   
+    
+    // delay(100);
+    // for(int i; i<100; i++){
+      
+    //   delay(100);
+    // }
+
+
+    //ProcRewCmd(dat[0], dat[1], dat[2]);
+  
+    // RunReward();
+    // feed(rewDuration);
+    // Serial.print(rewDuration);
+    // delay(10);
+    // QueuePacket(&r2c, 'O', 0, 0, 0, 0, false, true);
+    // SendPacket(&r2c);
+    
+  
+    break;
+
+  // case ('T'):
+  //   Serial.println("Case T");
+  //   QueuePacket(&r2c, 'T', 0, 0, 0, 0, true, true, true, false);
+  //   delay(1);
+  //   SendPacket(&r2c);
+  //   break;
+
+  // case ('K'):
+  //   Serial.println("Case K");
+  //   break;
+
+  // case ('I'):
+  //   Serial.println("Case I");
+  //   is_RatOnTrack = c2r.dat[0] == 1 ? true : false;
+  //   isInitialMoveDone = true;
+  //   break;
+
+  // case ('P'):
+  //   Serial.println("Case P");
+  //   // Serial.println(c2r.dat[0]);
+  //   // Serial.println(c2r.dat[1]);
+  //   // Serial.println(c2r.dat[2]);
+
+  //   // if (isInitialMoveDone == true){
+  //     if (c2r.dat[0] == 0) {
+  //       RatPos_cm = c2r.dat[1];
+  //       RatPos_rad = RatPos_cm / ((140 * PI) / (2 * PI));
+  //     }
+  //     else {
+  //       RobPos_cm = c2r.dat[1];
+  //       RobPos_rad = RobPos_cm / ((140 * PI) / (2 * PI));
+  //     }
+  //     if (!is_streamStarted){ 
+  //       is_streamStarted = true;
+  //       QueuePacket(&r2c, 'K', 1, 0, 0, 0, true, false);
+  //       delay(1);
+  //       SendPacket(&r2c);
+  //     }
+  //     else{
+  //       posDiff = (abs(RatPos_cm - RobPos_cm));
+  //       if(posDiff > 55){
+          
+
+  //         if (myL6474.GetShieldState(0) == INACTIVE && isHalted == false){
+  //           myL6474.Run(0, FORWARD, 1);
+  //           pumpEtoh();
+
+  //         }
+          
+  //       }
+  //       else{
+  //         myL6474.HardStop(0, 1);
+  //       }
+  //     }
+
+  //     // if (isInitialMoveDone == true){
+
+  //     //   motorSpeed = GetPID(moveTarg, RobPos_rad);
+  //     //   myL6474.Run(0, FORWARD, 0);
+  //     //   delay(motorSpeed);
+  //     //   myL6474.HardStop(0, 0);
+
+  //     // }
+      
+      
+  //   // }
+
+  //   break;
+
+//   case ('U'):
+//   // Send number of log bytes being sent
+// 			QueuePacket(&r2c, 'U', cnt_logBytesStored, 0, 0, 0, true, false);
+//       delay(1);
+//       SendPacket(&r2c);
+
+//   break;
+
+//   case ('L'):
+//     Serial.println("Case L");
+//     do_LogSend = c2r.dat[0] == 1 ? true : false;
+
+//     if (!do_LogSend)
+// 		{
+
+// 			// Log
+
+// 			// Send number of log bytes being sent
+// 			QueuePacket(&r2c, 'U', cnt_logBytesStored, 0, 0, 0, true, false);
+//       delay(1);
+//       SendPacket(&r2c);
+
+			
+// 		}
+//     break;
+
+//   case ('Q'):
+//     Serial.println("Case Q");
+//     QueuePacket(&r2a, 'q', 0, 0, 0, 0, true, false);
+//     delay(1);
+//     SendPacket(&r2a);
+//     break;
+
+// case ('S'):
+//     Serial.println("Case S");
+//     QueuePacket(&r2c, 'S', 0, 0, 0, 0, true, true);
+//     delay(1);
+//     SendPacket(&r2c);
+//     // Store message data
+// 		sesMsg = (byte)c2r.dat[0];
+
+// 		// Store info from first 'S' packet
+// 		if (sesMsg == 1)
+// 		{
+// 			sesCond = (byte)c2r.dat[1];
+// 			sesTask = (byte)c2r.dat[2];
+// 		}
+
+// 		// Store info from second 'S' packet
+// 		if (sesMsg == 2)
+// 		{
+// 			sesSound = (byte)c2r.dat[1];
+// 			sesSetpointHeadDist = c2r.dat[2];
+// 		}
+
+// 		// Handle first 'S' packet
+// 		if (sesMsg == 1)
+// 		{
+
+// 			// Reset flags
+// 			is_ManualSes = false;
+// 			is_ForageTask = false;
+
+// 			// Handle Manual session
+// 			if (sesCond == 1)
+// 			{
+// 				// Turn on LCD light
+// 				LCDoff();
+// 				// Set flag
+// 				is_ManualSes = true;
+// 			}
+
+// 			// Handle Behavior session
+// 			if (sesCond == 2){}
+
+// 			// Handle Implant session
+// 			if (sesCond == 3){}
+
+// 			// Handle Track task
+// 			if (sesTask == 1)
+// 			{
+// 				// Set rew led min
+// 				// rewLEDduty[0] = 0;
+
+// 				// Change reward solonoid on scale
+// 				pumpOpenScale = 1;
+// 			}
+
+// 			// Handle Forage task
+// 			if (sesTask == 2)
+// 			{
+
+// 				// Set rew led forage min
+// 				// rewLEDduty[0] = 2;
+
+// 				// Set to min
+// 				// analogWrite(pin.LED_REW_C, rewLEDduty[0]);
+// 				// analogWrite(pin.LED_REW_R, rewLEDduty[0]);
+
+// 				// Change reward solonoid on scale
+// 				pumpOpenScale = 0.5;
+
+// 				// Set flag
+// 				is_ForageTask = true;
+// 			}
+
+// 		}
+
+// 		// Handle second 'S' packet
+// 		if (sesMsg == 2)
+// 		{
+
+// 			// Handle no sound condition
+// 			if (sesSound == 0)
+// 			{
+
+// 				// No sound
+// 				QueuePacket(&r2a, 's', 0, 0, 0, 0, false, false);
+//         delay(1);
+//         SendPacket(&r2a);
+// 			}
+
+// 			// Handle white noise only condition
+// 			if (sesSound == 1)
+// 			{
+
+// 				// Use white noise only
+// 				QueuePacket(&r2a, 's', 1, 0, 0, 0, false, false);
+//         delay(1);
+//         SendPacket(&r2a);
+// 			}
+
+// 			// Handle white noise and reward tone condition
+// 			if (sesSound == 2)
+// 			{
+// 				// Use white and reward noise
+// 				QueuePacket(&r2a, 's', 2, 0, 0, 0, false, false, false);
+//         delay(1);
+//         SendPacket(&r2a);
+// 			}
+
+// 			// Compute and store pid setpoint
+// 			PIDsetPoint = setPointHead + sesSetpointHeadDist;
+
+// 			// Update tracker feeder pass distance
+// 			// feedTrackPastDist = feedDist + feedHeadPastDist + sesSetpointHeadDist;
+
+// 			// Log set setpoint
+
+// 			// Log feed pass distance
+		
+
+// 		}
+//     break;
+
+
   }
+  }
+  
 }
 
 
@@ -1737,7 +1913,6 @@ case ('S'):
 	uint32_t t_retractArm = 0;
 	uint32_t t_moveArmStr = 0;
 	double goalPosCum = 0;
-	bool isRewarding = false;
 	bool isZoneTriggered = false;
 	bool isAllZonePassed = false;
 	bool is_ekfNew = false;
@@ -1784,32 +1959,12 @@ case ('S'):
 
 	
 void checkMove(){
-  //  if (isLEDon == true){
-  //   Serial.println("Turning LED Off");
-  //   clearLCD();
-  //   writeLCD("Turning LED Off...", 0);
-  //   digitalWrite(LED, LOW);
-  //   clearLCD();
-  //   isLEDon = false;
-  // }
-  // else{
-  //   Serial.println("Turning LED Off");
-  //   clearLCD();
-  //   writeLCD("Turning LED Off...", 0);
-  //   digitalWrite(LED, HIGH);
-  //   clearLCD();
-  //   isLEDon = true;
-  // }
+
+  clearLCD();
 
   proxSensorVal = digitalRead(proxSensor);
   prox2SensorVal = digitalRead(proxSensor2);
 
-  // if (proxSensorVal == 0) {
-  //   digitalWrite(LED, HIGH);
-  // }
-  // else{
-  //   digitalWrite(LED, LOW);
-  // }
 
   if (proxSensorVal == 0){
     isRobotInFeedPosition = true;
@@ -1819,22 +1974,31 @@ void checkMove(){
   }
 
   // If both sensor are activated, stop robot
-  if (proxSensorVal == 0 && prox2SensorVal == 0){
+  if (proxSensorVal == 0 && prox2SensorVal == 0 && isRobotBulldozing == false){
     myL6474.HardStop(0, 1);
     isMoveReady = false;
     isMoving = false;
+    isMovePack = false;
   }
   // If only front sensor is activated, get ready to move forward
   else if (proxSensorVal == 0 && prox2SensorVal == 1){
+    if (isRobotBulldozing == false) {
+      myL6474.HardStop(0, 1);
+    }
     isMoveReady = true;
+    isMovePack = false;
   }
   else if (proxSensorVal == 1 && prox2SensorVal == 0){
+    if (isRobotBulldozing == false) {
+      myL6474.HardStop(0, 1);
+    }
     isMoveReady = false;
+    isMovePack = false;
   }
   // If both sensor are inactive, determine whether rat is in front or behind sensors
   else if (proxSensorVal == 1 && prox2SensorVal == 1){
     // If rat is in front of robot, move forward
-    if (isMoveReady == true && isHalted == false){
+    if (isMoveReady == true && isHalted == false && isRewarding == false && isRobotBulldozing == false){
       myL6474.Run(0, FORWARD, 1);
       delay(10);
       isMoving = true;
@@ -1842,9 +2006,33 @@ void checkMove(){
   }
 }
 
+void checkPreviousMove(){
+
+  proxSensorVal = digitalRead(proxSensor);
+  prox2SensorVal = digitalRead(proxSensor2);
+
+  if (isMoveInterrupted == true && (proxSensorVal == 0 || prox2SensorVal == 0)){
+    myL6474.Run(0, FORWARD, 1);
+    delay(10);
+    isMoving = true;
+    isMoveInterrupted = false;
+  }
+
+}
+
 void stopRobot(){
-  myL6474.HardStop(0, 1);
-  isMoving = false;
+  // clearLCD();
+  // delay(10);
+  // writeLCD("Stopping; Interrupt", 0);
+  // delay(1000);
+  // clearLCD();
+
+  if (isSendingPacket == false && isRobotBulldozing == false && isMovePack == false){
+    myL6474.HardStop(0, 1);
+    isMoveInterrupted = true;
+    isMoving = false;
+    //checkMove();
+  }
 }
 
 void stopRobotSlow(){
@@ -2269,4 +2457,11 @@ void MyFlagInterruptHandler(void)
   {
     //overcurrent detection 
   }      
+}
+
+
+void serialFlush(){
+  while(Serial.available() > 0) {
+    char t = Serial.read();
+  }
 }
